@@ -196,27 +196,38 @@ export default function Index() {
         const elapsed = Date.now() - t0;
 
         const batchResults: CheckResult[] = (data.results || []).map((r: {
-          email: string; password: string; status: string; message?: string; http_code?: number;
+          email: string; password: string; status: string; message?: string; http_code?: number; elapsed_ms?: number; response_preview?: string;
         }) => ({
           id: Date.now().toString() + Math.random(),
           email: r.email,
           password: r.password,
           status: (r.status as CheckStatus) || 'error',
           checkedAt: new Date().toLocaleString('ru'),
-          responseTime: Math.round(elapsed / batch.length),
+          responseTime: r.elapsed_ms ?? Math.round(elapsed / batch.length),
           message: r.message,
+          response_preview: r.response_preview,
         }));
 
         setResults(prev => [...prev, ...batchResults]);
 
         batchResults.forEach(r => {
-          const logType = r.status === 'valid' ? 'success' : r.status === 'error' ? 'warn' : 'error';
+          const logType = r.status === 'valid' ? 'success' : r.status === 'error' || r.status === 'captcha' ? 'warn' : 'error';
+          const extra = (r as CheckResult & { message?: string; response_preview?: string });
           setLogs(prev => [...prev, {
             id: Date.now().toString() + Math.random(),
             time: new Date().toLocaleTimeString('ru'),
-            message: `${r.status.toUpperCase()} → ${r.email} — ${(r as CheckResult & {message?: string}).message || ''}`,
+            message: `${r.status.toUpperCase()} → ${r.email} — ${extra.message || ''} (${r.responseTime}ms)`,
             type: logType,
           }]);
+          // Показываем preview ответа если статус неизвестный
+          if (r.status === 'unknown' || r.status === 'captcha') {
+            setLogs(prev => [...prev, {
+              id: Date.now().toString() + Math.random(),
+              time: '',
+              message: `  ↳ PREVIEW: ${(extra.response_preview || '').slice(0, 120)}`,
+              type: 'info',
+            }]);
+          }
         });
 
       } catch (err) {

