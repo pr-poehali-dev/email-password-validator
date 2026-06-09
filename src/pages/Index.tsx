@@ -91,6 +91,7 @@ export default function Index() {
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<CheckResult[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [sessionCookie, setSessionCookie] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [apiMethod, setApiMethod] = useState('POST');
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: string }[]>([]);
@@ -190,7 +191,7 @@ export default function Index() {
         const resp = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ credentials: batch }),
+          body: JSON.stringify({ credentials: batch, session_cookie: sessionCookie }),
         });
         const data = await resp.json();
         const elapsed = Date.now() - t0;
@@ -496,6 +497,27 @@ export default function Index() {
                 </div>
               </div>
 
+              {/* Куки сессии */}
+              <div className="glass-card rounded-2xl p-4 neon-border">
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon name="Cookie" size={16} className="text-[var(--neon-green)]" />
+                  <span className="text-sm font-bold text-white">Куки браузерной сессии</span>
+                  <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded" style={{ background: sessionCookie ? 'rgba(0,255,179,0.1)' : 'rgba(255,215,0,0.1)', color: sessionCookie ? 'var(--neon-green)' : 'var(--neon-yellow)' }}>
+                    {sessionCookie ? '✓ Установлены' : '⚠ Не установлены'}
+                  </span>
+                </div>
+                <p className="text-xs text-white/30 mb-2">
+                  F12 → Network → запрос <span className="font-mono text-white/50">login.json</span> → Headers → скопируй строку <span className="font-mono text-white/50">cookie:</span>
+                </p>
+                <textarea
+                  value={sessionCookie}
+                  onChange={e => setSessionCookie(e.target.value)}
+                  rows={2}
+                  placeholder="incap_ses_176_519901=...; visid_incap_519901=...; IFSID=..."
+                  className="w-full bg-white/5 border border-white/10 text-white text-xs rounded-lg px-3 py-2 font-mono placeholder:text-white/20 focus:border-[var(--neon-green)] outline-none resize-none transition-colors"
+                />
+              </div>
+
               <button
                 onClick={startCheck}
                 disabled={parsedLines.length === 0}
@@ -526,29 +548,28 @@ export default function Index() {
               </div>
 
               <div className="glass-card rounded-2xl p-4 neon-border">
-                <div className="flex items-center gap-2 mb-3">
-                  <Icon name="Settings" size={16} className="text-[var(--neon-green)]" />
-                  <span className="text-sm font-bold text-white">Настройки проверки</span>
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon name="Cookie" size={16} className="text-[var(--neon-green)]" />
+                  <span className="text-sm font-bold text-white">Куки браузерной сессии</span>
+                  <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'rgba(0,255,179,0.1)', color: 'var(--neon-green)' }}>
+                    {sessionCookie ? '✓ Установлены' : '⚠ Не установлены'}
+                  </span>
                 </div>
-                <div className="grid md:grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs text-white/40 mb-1 block">Метод</label>
-                    <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-lg px-3 py-2 font-mono">
-                      <option value="POST">POST</option>
-                      <option value="GET">GET</option>
-                    </select>
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="text-xs text-white/40 mb-1 block">API URL</label>
-                    <input
-                      type="text"
-                      value={apiUrl}
-                      onChange={e => setApiUrl(e.target.value)}
-                      placeholder="https://example.com/login"
-                      className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-lg px-3 py-2 font-mono placeholder:text-white/20 focus:border-[var(--neon-green)] outline-none"
-                    />
-                  </div>
-                </div>
+                <p className="text-xs text-white/30 mb-3">
+                  F12 → Network → запрос login.json → Headers → скопируй значение поля <span className="font-mono text-white/50">cookie</span> и вставь сюда
+                </p>
+                <textarea
+                  value={sessionCookie}
+                  onChange={e => setSessionCookie(e.target.value)}
+                  rows={3}
+                  placeholder="incap_ses_176_519901=...; visid_incap_519901=...; IFSID=..."
+                  className="w-full bg-white/5 border border-white/10 text-white text-xs rounded-lg px-3 py-2 font-mono placeholder:text-white/20 focus:border-[var(--neon-green)] outline-none resize-none transition-colors"
+                />
+                {sessionCookie && (
+                  <button onClick={() => setSessionCookie('')} className="mt-1 text-xs text-white/30 hover:text-[var(--neon-red)] transition-colors">
+                    Очистить
+                  </button>
+                )}
               </div>
 
               <div className="glass-card rounded-2xl p-5">
