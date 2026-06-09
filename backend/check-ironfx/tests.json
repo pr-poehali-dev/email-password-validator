@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "Проверка одного аккаунта",
+      "method": "POST",
+      "path": "/",
+      "body": {"credentials": [{"email": "test@example.com", "password": "wrongpass"}]},
+      "expectedStatus": 200,
+      "expectedBody": {"results": []},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    }
+  ]
+}
